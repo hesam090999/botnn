@@ -1,6 +1,7 @@
 import logging
 import sqlite3
 import re
+import os
 from datetime import datetime, timedelta
 from telegram import Update, ChatPermissions
 from telegram.ext import (
@@ -8,9 +9,10 @@ from telegram.ext import (
     ContextTypes, filters
 )
 from telegram.constants import ChatMemberStatus
+from telegram.request import HTTPXRequest
 
 # ==================== تنظیمات ====================
-BOT_TOKEN ="8680298065:AAGuiJ6R0std9vXOAVTb-B-QYrpSb9cnaXA"
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8680298065:AAGuiJ6R0std9vXOAVTb-B-QYrpSb9cnaXA")
 OWNER_ID = 8076104332
 DB_PATH = "bot_data.db"
 
@@ -109,7 +111,8 @@ def inc_warnings(user_id, chat_id):
         c.execute('UPDATE users SET warnings = warnings + 1 WHERE user_id=? AND chat_id=?', (user_id, chat_id))
         conn.commit()
         c.execute('SELECT warnings FROM users WHERE user_id=? AND chat_id=?', (user_id, chat_id))
-        return c.fetchone()[0]
+        r = c.fetchone()
+        return r[0] if r else 0
 
 def reset_warnings(user_id, chat_id):
     with db() as conn:
@@ -231,7 +234,7 @@ async def check_membership(bot, user_id):
             not_joined.append(username)
     return len(not_joined) == 0, not_joined
 
-def build_lock_list(not_joined=None):
+def build_lock_list():
     targets = get_lock_targets()
     if not targets:
         return ""
@@ -255,12 +258,11 @@ async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user.is_bot:
             return
 
-        is_new = save_user(user, chat_id)
+        save_user(user, chat_id)
         name = user.first_name or "کاربر"
 
         targets = get_lock_targets()
         if targets:
-            # کاربر رو سکوت کن تا جوین شه
             await restrict_user(context.bot, chat_id, user.id, 60 * 60 * 24 * 365, "pending_verification")
             set_verified(user.id, chat_id, 0)
             lock_list = build_lock_list()
@@ -299,23 +301,19 @@ async def check_pending(context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
 
-# ==================== دستور /user ====================
-async def user_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ==================== نمایش مشخصات کاربر ====================
+async def show_user_info(update: Update, target_user, chat_id):
+    """نمایش مشخصات کاربر"""
     msg = update.effective_message
-    if not msg.reply_to_message:
-        await msg.reply_text("این دستور را باید روی پیام کاربر ریپلای کنید.")
-        return
-    if not is_admin(update.effective_user.id):
-        return
-
-    target = msg.reply_to_message.from_user
-    chat_id = msg.chat_id
-    row = get_user(target.id, chat_id)
+    
+    row = get_user(target_user.id, chat_id)
+    if not row:
+        save_user(target_user, chat_id)
+        row = get_user(target_user.id, chat_id)
 
     if not row:
-        # اگر در دیتابیس نبود، همین حالا ذخیره کن
-        save_user(target, chat_id)
-        row = get_user(target.id, chat_id)
+        await msg.reply_text("⚠️ خطا در خواندن اطلاعات کاربر.")
+        return
 
     user_id, username, first_name, join_date, warnings, verified = row
 
@@ -324,14 +322,14 @@ async def user_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         jd = join_date or "نامشخص"
 
-    mute = get_mute(target.id, chat_id)
+    mute = get_mute(target_user.id, chat_id)
     if mute:
         until = datetime.fromisoformat(mute[0]).strftime("%Y-%m-%d %H:%M")
-        status = f"محدود تا {until} (دلیل: {mute[1]})"
+        status = f"🔒 محدود تا {until} (دلیل: {mute[1]})"
     elif verified:
-        status = "فعال"
+        status = "✅ فعال"
     else:
-        status = "در انتظار تأیید عضویت"
+        status = "⏳ در انتظار تأیید عضویت"
 
     text = (
         f"📋 <b>مشخصات کاربر</b>\n\n"
@@ -340,12 +338,168 @@ async def user_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🆔 یوزر آیدی: <code>{user_id}</code>\n"
         f"📅 تاریخ ورود: {jd}\n"
         f"⚠️ اخطارها: {warnings}\n"
-        f"🔒 وضعیت: {status}"
+        f"وضعیت: {status}"
     )
     await msg.reply_text(text, parse_mode="HTML")
 
-# ==================== دستورات ادمین با ریپلای ====================
-async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ==================== دستور /user ====================
+async def user_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    user = update.effective_user
+    chat_id = msg.chat_id
+
+    if not is_admin(user.id):
+        return
+
+    # اگه ریپلای داشت، از ریپلای بگیر
+    if msg.reply_to_message:
+        await show_user_info(update, msg.reply_to_message.from_user, chat_id)
+        return
+
+    # اگه آیدی عددی توی دستور بود
+    if context.args:
+        try:
+            uid = int(to_en_digits(context.args[0]))
+            member = await context.bot.get_chat_member(chat_id, uid)
+            await show_user_info(update, member.user, chat_id)
+            return
+        except Exception:
+            await msg.reply_text("⚠️ کاربر با این آیدی پیدا نشد.\nمثال: `/user 123456789`", parse_mode="Markdown")
+            return
+
+    await msg.reply_text(
+        "⚠️ نحوه استفاده:\n"
+        "۱) روی پیام کاربر ریپلای کنید و بنویسید `/user`\n"
+        "۲) یا بنویسید `/user 123456789`\n"
+        "۳) یا بنویسید `ایدی 123456789`",
+        parse_mode="Markdown"
+    )
+
+# ==================== دستور /sokot (سکوت ۵ دقیقه) ====================
+async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    msg = update.effective_message
+    chat_id = msg.chat_id
+
+    target = None
+    if msg.reply_to_message:
+        target = msg.reply_to_message.from_user
+    elif context.args:
+        try:
+            uid = int(to_en_digits(context.args[0]))
+            member = await context.bot.get_chat_member(chat_id, uid)
+            target = member.user
+        except Exception:
+            await msg.reply_text("کاربر یافت نشد.")
+            return
+    else:
+        await msg.reply_text("روی پیام کاربر ریپلای کنید یا آیدی بدهید:\n`/sokot 123456789`", parse_mode="Markdown")
+        return
+
+    name = target.first_name or "کاربر"
+    ok = await restrict_user(context.bot, chat_id, target.id, 300, "سکوت")
+    if ok:
+        await msg.reply_text(f"کاربر {name} به مدت ۵ دقیقه از ارسال پیام محروم شد.")
+    else:
+        await msg.reply_text("خطا در سکوت کاربر. مطمئن شوید ربات مدیر است.")
+
+# ==================== دستور /ekhtar (اخطار) ====================
+async def warn_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    msg = update.effective_message
+    chat_id = msg.chat_id
+
+    target = None
+    if msg.reply_to_message:
+        target = msg.reply_to_message.from_user
+    elif context.args:
+        try:
+            uid = int(to_en_digits(context.args[0]))
+            member = await context.bot.get_chat_member(chat_id, uid)
+            target = member.user
+        except Exception:
+            await msg.reply_text("کاربر یافت نشد.")
+            return
+    else:
+        await msg.reply_text("روی پیام کاربر ریپلای کنید یا آیدی بدهید:\n`/ekhtar 123456789`", parse_mode="Markdown")
+        return
+
+    name = target.first_name or "کاربر"
+    w = inc_warnings(target.id, chat_id)
+    if w >= 3:
+        reset_warnings(target.id, chat_id)
+        await restrict_user(context.bot, chat_id, target.id, 300, "اخطار سوم")
+        await msg.reply_text(
+            f"کاربر {name} به دلیل دریافت سه اخطار، به مدت ۵ دقیقه از ارسال پیام محروم شد."
+        )
+    else:
+        await restrict_user(context.bot, chat_id, target.id, 60, "اخطار")
+        await msg.reply_text(
+            f"کاربر {name} به دلیل نقض قوانین، به مدت ۱ دقیقه از ارسال پیام محروم شد.\n"
+            f"تعداد اخطارهای فعلی: {w} از ۳"
+        )
+
+# ==================== دستور /ban (بسته یک‌روزه) ====================
+async def ban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    msg = update.effective_message
+    chat_id = msg.chat_id
+
+    target = None
+    if msg.reply_to_message:
+        target = msg.reply_to_message.from_user
+    elif context.args:
+        try:
+            uid = int(to_en_digits(context.args[0]))
+            member = await context.bot.get_chat_member(chat_id, uid)
+            target = member.user
+        except Exception:
+            await msg.reply_text("کاربر یافت نشد.")
+            return
+    else:
+        await msg.reply_text("روی پیام کاربر ریپلای کنید یا آیدی بدهید:\n`/ban 123456789`", parse_mode="Markdown")
+        return
+
+    name = target.first_name or "کاربر"
+    ok = await restrict_user(context.bot, chat_id, target.id, 86400, "بسته یک‌روزه")
+    if ok:
+        await msg.reply_text(f"کاربر {name} به مدت یک روز از ارسال پیام محروم شد.")
+    else:
+        await msg.reply_text("خطا در بستن کاربر.")
+
+# ==================== دستور /azad (آزادسازی) ====================
+async def free_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    msg = update.effective_message
+    chat_id = msg.chat_id
+
+    target = None
+    if msg.reply_to_message:
+        target = msg.reply_to_message.from_user
+    elif context.args:
+        try:
+            uid = int(to_en_digits(context.args[0]))
+            member = await context.bot.get_chat_member(chat_id, uid)
+            target = member.user
+        except Exception:
+            await msg.reply_text("کاربر یافت نشد.")
+            return
+    else:
+        await msg.reply_text("روی پیام کاربر ریپلای کنید یا آیدی بدهید:\n`/azad 123456789`", parse_mode="Markdown")
+        return
+
+    name = target.first_name or "کاربر"
+    reset_warnings(target.id, chat_id)
+    set_verified(target.id, chat_id, 1)
+    await unrestrict_user(context.bot, chat_id, target.id)
+    await msg.reply_text(f"کاربر {name} از محدودیت خارج شد و از این پس می‌تواند پیام ارسال کند.")
+
+# ==================== دستورات فارسی ریپلای ====================
+async def persian_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     if not msg or not msg.reply_to_message:
         return
@@ -357,14 +511,12 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = msg.chat_id
     name = target.first_name or "کاربر"
 
-    if cmd in ("اخطار",):
+    if cmd == "اخطار":
         w = inc_warnings(target.id, chat_id)
         if w >= 3:
             reset_warnings(target.id, chat_id)
             await restrict_user(context.bot, chat_id, target.id, 300, "اخطار سوم")
-            await msg.reply_text(
-                f"کاربر {name} به دلیل دریافت سه اخطار، به مدت ۵ دقیقه از ارسال پیام محروم شد."
-            )
+            await msg.reply_text(f"کاربر {name} به دلیل دریافت سه اخطار، به مدت ۵ دقیقه از ارسال پیام محروم شد.")
         else:
             await restrict_user(context.bot, chat_id, target.id, 60, "اخطار")
             await msg.reply_text(
@@ -386,6 +538,21 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await unrestrict_user(context.bot, chat_id, target.id)
         await msg.reply_text(f"کاربر {name} از محدودیت خارج شد و از این پس می‌تواند پیام ارسال کند.")
 
+    elif cmd.startswith("ایدی"):
+        # "ایدی 123456789"
+        parts = cmd.split()
+        if len(parts) >= 2:
+            try:
+                uid = int(to_en_digits(parts[1]))
+                member = await context.bot.get_chat_member(chat_id, uid)
+                await show_user_info(update, member.user, chat_id)
+            except Exception:
+                await msg.reply_text("کاربر با این آیدی پیدا نشد.")
+        else:
+            # اگه ریپلای داشت
+            if msg.reply_to_message:
+                await show_user_info(update, target, chat_id)
+
 # ==================== مدیریت ادمین‌ها ====================
 async def add_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
@@ -403,7 +570,7 @@ async def add_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_admin(uid)
     await msg.reply_text(f"کاربر با آیدی {uid} به عنوان ادمین اضافه شد.")
 
-# ==================== مدیریت کانال/گروه اجباری ====================
+# ==================== کانال/گروه اجباری ====================
 async def add_channel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -473,7 +640,7 @@ async def list_lock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(f"{icon} {u}")
     await update.message.reply_text("\n".join(lines))
 
-# ==================== پیام‌های زمان‌بندی‌شده (SMS) ====================
+# ==================== SMS ====================
 async def send_sms_job(context: ContextTypes.DEFAULT_TYPE):
     data = context.job.data
     code = data["code"]
@@ -491,7 +658,6 @@ async def send_sms_job(context: ContextTypes.DEFAULT_TYPE):
 
 def schedule_sms(app, code, chat_id, hours):
     job_name = f"sms_{chat_id}_{code}"
-    # حذف جاب قبلی اگه بود
     for j in app.job_queue.get_jobs_by_name(job_name):
         j.schedule_removal()
     app.job_queue.run_repeating(
@@ -503,23 +669,16 @@ def schedule_sms(app, code, chat_id, hours):
     )
 
 async def add_sms_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # این هندلر برای متن‌های /addsms.code.text.hours استفاده می‌شود
     msg = update.effective_message
     if not is_admin(update.effective_user.id):
         return
-    parts = msg.text.split(".", 3)  # [/addsms, code, text, hours]
-    # در واقع split با maxsplit=3 روی '،' ولی پیام ممکنه نقطه داشته باشه
-    # بهتر: از راست پارس کنیم
     raw = msg.text
-    # حذف /addsms.
     raw = re.sub(r'^/addsms\.', '', raw, flags=re.IGNORECASE)
-    # جدا کردن آخرین بخش (ساعت)
     last_dot = raw.rfind(".")
     if last_dot == -1:
         await msg.reply_text("فرمت صحیح: /addsms.کد.متن.ساعت")
         return
     before, hours_str = raw[:last_dot], raw[last_dot+1:]
-    # جدا کردن کد از متن
     first_dot = before.find(".")
     if first_dot == -1:
         await msg.reply_text("فرمت صحیح: /addsms.کد.متن.ساعت")
@@ -572,10 +731,8 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def post_init(app: Application):
-    # زمان‌بندی مجدد پیام‌های ذخیره‌شده پس از ری‌استارت
     for code, chat_id, message, hours in get_all_sms():
         schedule_sms(app, code, chat_id, hours)
-    # بررسی دوره‌ای کاربران در انتظار تأیید (هر ۳۰ ثانیه)
     app.job_queue.run_repeating(check_pending, interval=30, first=10)
 
 # ==================== main ====================
@@ -587,7 +744,7 @@ def main():
     # ورود اعضای جدید
     app.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))
 
-    # دستورات
+    # دستورات اسلش‌دار
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("user", user_info_cmd))
     app.add_handler(CommandHandler("addadmin", add_admin_cmd))
@@ -597,20 +754,29 @@ def main():
     app.add_handler(CommandHandler("delgroup", del_group_cmd))
     app.add_handler(CommandHandler("listlock", list_lock_cmd))
 
-    # دستورات ادمینی که با ریپلای کار می‌کنند
-    app.add_handler(MessageHandler(
-        filters.ChatType.GROUPS & filters.Regex(r'^(اخطار|سکوت|ببندش|ازاد|آزاد)$') & filters.REPLY,
-        admin_actions
-    ))
+    # دستورات سکوت / اخطار / بن / آزاد با اسلش
+    app.add_handler(CommandHandler("sokot", mute_cmd))
+    app.add_handler(CommandHandler("mute", mute_cmd))
+    app.add_handler(CommandHandler("ekhtar", warn_cmd))
+    app.add_handler(CommandHandler("warning", warn_cmd))
+    app.add_handler(CommandHandler("ban", ban_cmd))
+    app.add_handler(CommandHandler("band", ban_cmd))
+    app.add_handler(CommandHandler("azad", free_cmd))
+    app.add_handler(CommandHandler("free", free_cmd))
 
-    # SMS با فرمت نقطه‌ای (به‌عنوان متن، نه کامند)
+    # SMS
+    app.add_handler(MessageHandler(filters.Regex(r'^/addsms\.'), add_sms_cmd))
+    app.add_handler(MessageHandler(filters.Regex(r'^/remsms\.'), rem_sms_cmd))
+
+    # دستورات فارسی با ریپلای (اخطار، سکوت، ببندش، ازاد، ایدی)
     app.add_handler(MessageHandler(
-        filters.Regex(r'^/addsms\.') & filters.ChatType.GROUPS,
-        add_sms_cmd
+        filters.ChatType.GROUPS & filters.Regex(r'^(اخطار|سکوت|ببندش|ازاد|آزاد|ایدی)$') & filters.REPLY,
+        persian_actions
     ))
+    # "ایدی 123456789" بدون ریپلای
     app.add_handler(MessageHandler(
-        filters.Regex(r'^/remsms\.') & filters.ChatType.GROUPS,
-        rem_sms_cmd
+        filters.ChatType.GROUPS & filters.Regex(r'^ایدی\s+\d+$'),
+        persian_actions
     ))
 
     print("ربات در حال اجراست...")

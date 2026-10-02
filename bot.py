@@ -3,10 +3,10 @@ import sqlite3
 import re
 import asyncio
 from datetime import datetime, timedelta
-from telegram import Update, ChatPermissions
+from telegram import Update, ChatPermissions, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, ChatMemberHandler,
-    ContextTypes, filters
+    CallbackQueryHandler, ContextTypes, filters
 )
 from telegram.constants import ChatMemberStatus
 
@@ -262,15 +262,12 @@ async def restrict_user(bot, chat_id, user_id, seconds, reason):
 async def unrestrict_user(bot, chat_id, user_id):
     """آزادسازی کاربر — با متد مطمئن"""
     try:
-        # اول آنبن کن اگه بن بوده
         try:
             await bot.unban_chat_member(chat_id, user_id, only_if_banned=True)
         except Exception:
             pass
 
-        # حالا آزاد کن
         try:
-            # روش ۱: all_permissions
             await bot.restrict_chat_member(
                 chat_id=chat_id,
                 user_id=user_id,
@@ -278,7 +275,6 @@ async def unrestrict_user(bot, chat_id, user_id):
             )
             return True
         except AttributeError:
-            # اگه all_permissions نبود
             perms = ChatPermissions(
                 can_send_messages=True,
                 can_send_audios=True,
@@ -366,16 +362,86 @@ async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"⚠️ برای اینکه بتوانید پیام ارسال کنید و از ربات‌های رایگان استفاده کنید، "
                 f"ابتدا باید در گروه‌ها و کانال‌های زیر عضو شوید:\n\n"
                 f"{lock_list}\n\n"
-                f"✅ پس از عضویت، به‌صورت خودکار امکان ارسال پیام برای شما فعال می‌شود."
+                f"✅ پس از عضویت، روی دکمه زیر بزنید تا ربات بررسی کند."
             )
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ چک کردن عضویت", callback_data=f"check_{user.id}")]
+            ])
+            try:
+                await context.bot.send_message(
+                    chat_id, text, parse_mode="HTML",
+                    disable_web_page_preview=True,
+                    reply_markup=keyboard
+                )
+            except Exception as e:
+                logger.error(f"welcome failed: {e}")
         else:
             text = f"👋 {user_mention} به گروه خوش آمدید."
+            try:
+                await context.bot.send_message(chat_id, text, parse_mode="HTML")
+            except Exception as e:
+                logger.error(f"welcome failed: {e}")
 
+# ==================== دکمه چک کردن عضویت ====================
+async def check_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """کاربر روی دکمه «چک کردن عضویت» کلیک می‌کنه"""
+    query = update.callback_query
+    user = query.from_user
+    chat_id = query.message.chat_id
+
+    data = query.data
+    if not data.startswith("check_"):
+        return
+    target_user_id = int(data.replace("check_", ""))
+
+    if user.id != target_user_id:
+        await query.answer("این دکمه برای شما نیست.", show_alert=True)
+        return
+
+    await query.answer("در حال بررسی...")
+
+    targets = get_lock_targets()
+    if not targets:
+        await unrestrict_user(context.bot, chat_id, user.id)
+        await query.edit_message_text("✅ هیچ اجباری ثبت نشده. می‌توانید پیام ارسال کنید.")
+        return
+
+    not_joined = []
+    for username, _ in targets:
         try:
-            await context.bot.send_message(chat_id, text, parse_mode="HTML",
-                                            disable_web_page_preview=True)
+            m = await context.bot.get_chat_member(username, user.id)
+            if m.status in (ChatMemberStatus.LEFT, ChatMemberStatus.BANNED):
+                not_joined.append(username)
         except Exception as e:
-            logger.error(f"welcome failed: {e}")
+            logger.error(f"check failed for {username}: {e}")
+            not_joined.append(username)
+
+    if not not_joined:
+        ok = await unrestrict_user(context.bot, chat_id, user.id)
+        if ok:
+            await query.edit_message_text(
+                f"✅ <b>عضویت شما تأیید شد!</b>\n\n"
+                f"از این پس می‌توانید پیام ارسال کنید.\n"
+                f"از ربات‌های رایگان ما لذت ببرید! 🎉",
+                parse_mode="HTML"
+            )
+        else:
+            await query.edit_message_text(
+                "⚠️ خطا در آزادسازی. لطفاً به ادمین اطلاع دهید."
+            )
+    else:
+        lines = "\n".join([f"❌ {u}" for u in not_joined])
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 دوباره بررسی کن", callback_data=f"check_{user.id}")]
+        ])
+        await query.edit_message_text(
+            f"⚠️ <b>هنوز عضو نشده‌اید!</b>\n\n"
+            f"لطفاً ابتدا در گروه‌ها/کانال‌های زیر عضو شوید:\n\n"
+            f"{lines}\n\n"
+            f"سپس دوباره روی دکمه زیر بزنید.",
+            parse_mode="HTML",
+            reply_markup=keyboard
+        )
 
 # ==================== نمایش مشخصات ====================
 async def show_user_info(msg, target_user, chat_id):
@@ -886,6 +952,9 @@ def main():
     app.add_handler(CommandHandler("listlock", list_lock_cmd))
     app.add_handler(MessageHandler(filters.Regex(r'^/addsms\.'), add_sms_cmd))
     app.add_handler(MessageHandler(filters.Regex(r'^/remsms\.'), rem_sms_cmd))
+
+    # ⭐ دکمه چک کردن عضویت
+    app.add_handler(CallbackQueryHandler(check_join_callback, pattern=r'^check_'))
 
     # ذخیره پیام‌ها
     app.add_handler(

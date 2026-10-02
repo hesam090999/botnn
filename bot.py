@@ -12,7 +12,7 @@ from telegram.constants import ChatMemberStatus
 # ==================== تنظیمات ====================
 BOT_TOKEN ="8680298065:AAGuiJ6R0std9vXOAVTb-B-QYrpSb9cnaXA"
 OWNER_ID = 8076104332
-DB_PATH = "/data/bot_data.db"
+DB_PATH = "bot_data.db"
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',

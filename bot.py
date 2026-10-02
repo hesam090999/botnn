@@ -215,27 +215,49 @@ async def restrict_user(bot, chat_id, user_id, seconds, reason):
     until = datetime.now() + timedelta(seconds=seconds)
     perms = ChatPermissions(can_send_messages=False)
     try:
-        await bot.restrict_chat_member(chat_id, user_id, permissions=perms, until_date=until)
+        await bot.restrict_chat_member(
+            chat_id=chat_id,
+            user_id=user_id,
+            permissions=perms,
+            until_date=until
+        )
         return True
     except Exception as e:
         logger.error(f"restrict failed: {e}")
         return False
 
 async def unrestrict_user(bot, chat_id, user_id):
-    perms = ChatPermissions(
-        can_send_messages=True,
-        can_send_media_messages=True,
-        can_send_other_messages=True,
-        can_add_web_page_previews=True,
-        can_send_polls=True,
-        can_invite_users=True,
-    )
+    """آزادسازی کاربر — با دو روش تلاش می‌کند"""
     try:
-        await bot.restrict_chat_member(chat_id, user_id, permissions=perms)
+        # روش ۱: همه دسترسی‌ها
+        await bot.restrict_chat_member(
+            chat_id=chat_id,
+            user_id=user_id,
+            permissions=ChatPermissions(
+                can_send_messages=True,
+                can_send_media_messages=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True,
+                can_send_polls=True,
+                can_invite_users=True,
+                can_change_info=False,
+                can_pin_messages=False,
+            )
+        )
         return True
     except Exception as e:
-        logger.error(f"unrestrict failed: {e}")
-        return False
+        logger.error(f"unrestrict failed (method 1): {e}")
+        # روش ۲: فقط پیام
+        try:
+            await bot.restrict_chat_member(
+                chat_id=chat_id,
+                user_id=user_id,
+                permissions=ChatPermissions(can_send_messages=True)
+            )
+            return True
+        except Exception as e2:
+            logger.error(f"unrestrict failed (method 2): {e2}")
+            return False
 
 def build_lock_list():
     targets = get_lock_targets()
@@ -458,12 +480,20 @@ async def free_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target = msg.reply_to_message.from_user
     target_mention = mention(target)
     reset_warnings(target.id, msg.chat_id)
-    await unrestrict_user(context.bot, msg.chat_id, target.id)
-    await msg.reply_text(
-        f"✅ {target_mention} محدودیت شما برداشته شد و از این پس می‌توانید "
-        f"در گروه پیام ارسال کنید.",
-        parse_mode="HTML"
-    )
+
+    ok = await unrestrict_user(context.bot, msg.chat_id, target.id)
+
+    if ok:
+        await msg.reply_text(
+            f"✅ {target_mention} محدودیت شما برداشته شد و از این پس می‌توانید "
+            f"در گروه پیام ارسال کنید.",
+            parse_mode="HTML"
+        )
+    else:
+        await msg.reply_text(
+            f"⚠️ خطا در آزادسازی کاربر.\n"
+            f"مطمئن شوید ربات ادمین است و دسترسی Restrict Members دارد."
+        )
 
 # ==================== پاک (پاک کردن همه آمار) ====================
 async def clear_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -493,10 +523,8 @@ async def persian_text_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
     text = msg.text.strip()
 
-    # لاگ برای دیباگ
     logger.info(f"📩 پیام دریافت شد: '{text}' از کاربر {update.effective_user.id}")
 
-    # نقشه دستورات
     if text == "سکوت":
         await mute_cmd(update, context)
     elif text == "اخطار":

@@ -1,6 +1,7 @@
 import logging
 import sqlite3
 import re
+import asyncio
 from datetime import datetime, timedelta
 from telegram import Update, ChatPermissions
 from telegram.ext import (
@@ -235,8 +236,9 @@ def mention(user):
     name = user.first_name or "کاربر"
     return f'<a href="tg://user?id={user.id}">{name}</a>'
 
+# ==================== سکوت کاربر ====================
 async def restrict_user(bot, chat_id, user_id, seconds, reason):
-    """سکوت کاربر — نسخه ساده و سازگار"""
+    """سکوت کاربر — با نمایش خطا در گروه"""
     until = datetime.now() + timedelta(seconds=seconds)
     try:
         await bot.restrict_chat_member(
@@ -247,29 +249,78 @@ async def restrict_user(bot, chat_id, user_id, seconds, reason):
         )
         return True
     except Exception as e:
-        logger.error(f"restrict failed: {e}")
+        err = str(e)
+        logger.error(f"restrict failed: {err}")
+        try:
+            await bot.send_message(chat_id, f"❌ خطای سکوت:\n<code>{err}</code>",
+                                    parse_mode="HTML")
+        except Exception:
+            pass
         return False
 
+# ==================== آزادسازی کاربر ====================
 async def unrestrict_user(bot, chat_id, user_id):
-    """آزادسازی کاربر — نسخه ساده و سازگار"""
+    """آزادسازی کاربر — با متد مطمئن"""
     try:
-        await bot.restrict_chat_member(
-            chat_id=chat_id,
-            user_id=user_id,
-            permissions=ChatPermissions(can_send_messages=True)
-        )
-        return True
+        # اول آنبن کن اگه بن بوده
+        try:
+            await bot.unban_chat_member(chat_id, user_id, only_if_banned=True)
+        except Exception:
+            pass
+
+        # حالا آزاد کن
+        try:
+            # روش ۱: all_permissions
+            await bot.restrict_chat_member(
+                chat_id=chat_id,
+                user_id=user_id,
+                permissions=ChatPermissions.all_permissions()
+            )
+            return True
+        except AttributeError:
+            # اگه all_permissions نبود
+            perms = ChatPermissions(
+                can_send_messages=True,
+                can_send_audios=True,
+                can_send_documents=True,
+                can_send_photos=True,
+                can_send_videos=True,
+                can_send_video_notes=True,
+                can_send_voice_notes=True,
+                can_send_polls=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True,
+                can_invite_users=True
+            )
+            await bot.restrict_chat_member(
+                chat_id=chat_id,
+                user_id=user_id,
+                permissions=perms
+            )
+            return True
     except Exception as e:
-        logger.error(f"unrestrict failed: {e}")
+        err = str(e)
+        logger.error(f"unrestrict failed: {err}")
+        try:
+            await bot.send_message(chat_id, f"❌ خطای آزادسازی:\n<code>{err}</code>",
+                                    parse_mode="HTML")
+        except Exception:
+            pass
         return False
 
+# ==================== بن کاربر ====================
 async def ban_user(bot, chat_id, user_id):
-    """اخراج کامل کاربر از گروه (بن دائمی)"""
     try:
         await bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
         return True
     except Exception as e:
-        logger.error(f"ban failed: {e}")
+        err = str(e)
+        logger.error(f"ban failed: {err}")
+        try:
+            await bot.send_message(chat_id, f"❌ خطای بن:\n<code>{err}</code>",
+                                    parse_mode="HTML")
+        except Exception:
+            pass
         return False
 
 def build_lock_list():
@@ -282,9 +333,8 @@ def build_lock_list():
         lines.append(f"{icon} {username}")
     return "\n".join(lines)
 
-# ==================== ذخیره پیام‌ها برای حذف گروهی ====================
+# ==================== ذخیره پیام‌ها ====================
 async def save_msg_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """هر پیام گروه رو ذخیره می‌کنه تا بعداً بشه حذفش کرد"""
     msg = update.effective_message
     if not msg:
         return
@@ -365,43 +415,25 @@ PANEL_TEXT = """🤖 <b>پنل مدیریت ربات</b>
 
 📌 <b>دستورات با ریپلای روی پیام کاربر:</b>
 
-🔹 <code>ایدی</code> — نمایش مشخصات و آمار کامل
+🔹 <code>ایدی</code> — نمایش مشخصات و آمار
 🔹 <code>سکوت</code> — ۵ دقیقه سکوت
 🔹 <code>اخطار</code> — ۱ دقیقه (۳ اخطار = ۵ دقیقه)
-🔹 <code>ببندش</code> — ۲۴ ساعت سکوت
+🔹 <code>ببندش</code> — ۲۴ ساعت
+🔹 <code>بن</code> — اخراج کامل از گروه
 🔹 <code>ازاد</code> — آزادسازی کاربر
-🔹 <code>پاک</code> — پاک کردن همه آمار و اخطارها
-🔹 <code>بن</code> — اخراج کامل کاربر از گروه
-🔹 <code>حذف</code> — حذف پیامی که ریپلای شده
+🔹 <code>پاک</code> — پاک کردن آمار
+🔹 <code>حذف</code> — حذف پیام ریپلای‌شده
 
 📌 <b>حذف گروهی:</b>
-🔹 <code>حذف 30</code> — حذف ۳۰ پیام آخر گروه
-🔹 <code>حذف 50</code> — حذف ۵۰ پیام آخر گروه
+🔹 <code>حذف 30</code> — حذف ۳۰ پیام آخر
 
-━━━━━━━━━━━━━━━
-
-⚙️ <b>دستورات ادمین:</b>
-
+⚙️ <b>دستورات اسلش‌دار:</b>
 👮 <code>/addadmin 123456789</code>
 📢 <code>/addchannel @username</code>
 👥 <code>/addgroup @username</code>
-🗑 <code>/delchannel @username</code>
-🗑 <code>/delgroup @username</code>
 📋 <code>/listlock</code>
-
-━━━━━━━━━━━━━━━
-
-💬 <b>پیام‌های زمان‌بندی‌شده:</b>
-
 ➕ <code>/addsms.کد.متن.ساعت</code>
-➖ <code>/remsms.کد</code>
-
-━━━━━━━━━━━━━━━
-
-📝 <b>نکات مهم:</b>
-• همه دستورات فارسی با ریپلای روی پیام کاربر
-• ربات باید توی گروه ادمین باشه
-• برای حذف گروهی، ربات باید دسترسی Delete Messages داشته باشه"""
+➖ <code>/remsms.کد</code>"""
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(PANEL_TEXT, parse_mode="HTML")
@@ -437,8 +469,6 @@ async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"از ارسال پیام محروم شدید.",
             parse_mode="HTML"
         )
-    else:
-        await msg.reply_text("خطا. مطمئن شوید ربات ادمین است و دسترسی Restrict Members دارد.")
 
 # ==================== اخطار ====================
 async def warn_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -467,7 +497,7 @@ async def warn_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text(
             f"⚠️ {target_mention} شما یک اخطار دریافت کردید و به مدت <b>۱ دقیقه</b> "
             f"از ارسال پیام محروم شدید.\n"
-            f"تعداد اخطارهای شما: <b>{w}</b> از ۳",
+            f"اخطارهای شما: <b>{w}</b> از ۳",
             parse_mode="HTML"
         )
 
@@ -489,11 +519,9 @@ async def ban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         inc_ban(target.id, msg.chat_id)
         await msg.reply_text(
             f"🚫 {target_mention} شما به دلیل نقض جدی قوانین گروه، به مدت "
-            f"<b>۲۴ ساعت (یک روز)</b> از ارسال پیام محروم شدید.",
+            f"<b>۲۴ ساعت</b> از ارسال پیام محروم شدید.",
             parse_mode="HTML"
         )
-    else:
-        await msg.reply_text("خطا. مطمئن شوید ربات ادمین است.")
 
 # ==================== بن (اخراج کامل) ====================
 async def kick_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -512,13 +540,10 @@ async def kick_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ok = await ban_user(context.bot, msg.chat_id, target.id)
     if ok:
         await msg.reply_text(
-            f"🚷 {target_mention} شما از گروه اخراج شدید و دیگر امکان ورود مجدد "
-            f"به گروه را ندارید.\n"
-            f"در صورت اعتراض، با مدیریت گروه در تماس باشید.",
+            f"🚷 {target_mention} شما از گروه اخراج شدید و دیگر امکان ورود "
+            f"مجدد به گروه را ندارید.",
             parse_mode="HTML"
         )
-    else:
-        await msg.reply_text("خطا. مطمئن شوید ربات ادمین است و دسترسی Ban Users دارد.")
 
 # ==================== ازاد ====================
 async def free_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -533,12 +558,6 @@ async def free_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target_mention = mention(target)
     reset_warnings(target.id, msg.chat_id)
 
-    # هم آنبن کن هم آنریستریکت
-    try:
-        await context.bot.unban_chat_member(msg.chat_id, target.id, only_if_banned=True)
-    except Exception:
-        pass
-
     ok = await unrestrict_user(context.bot, msg.chat_id, target.id)
 
     if ok:
@@ -546,11 +565,6 @@ async def free_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✅ {target_mention} محدودیت شما برداشته شد و از این پس می‌توانید "
             f"در گروه پیام ارسال کنید.",
             parse_mode="HTML"
-        )
-    else:
-        await msg.reply_text(
-            f"⚠️ خطا در آزادسازی کاربر.\n"
-            f"مطمئن شوید ربات ادمین است و دسترسی Restrict Members دارد."
         )
 
 # ==================== پاک ====================
@@ -567,18 +581,16 @@ async def clear_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target_mention = mention(target)
     clear_all_stats(target.id, msg.chat_id)
     await msg.reply_text(
-        f"🧹 {target_mention} تمام آمار و اخطارهای شما پاک شد.\n"
-        f"از این پس با پرونده‌ای تمیز در گروه فعالیت می‌کنید.",
+        f"🧹 {target_mention} تمام آمار و اخطارهای شما پاک شد.",
         parse_mode="HTML"
     )
 
-# ==================== حذف (تکی یا گروهی) ====================
+# ==================== حذف ====================
 async def delete_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     if not await is_admin(context.bot, msg.chat_id, update.effective_user.id):
         return
 
-    # حالت اول: حذف N پیام آخر
     args = msg.text.strip().split()
     if len(args) >= 2:
         try:
@@ -591,7 +603,6 @@ async def delete_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text("تعداد باید بین ۱ تا ۱۰۰ باشد.")
             return
 
-        # پیام دستور خودش هم جزء پیام‌هاست
         message_ids = get_last_messages(msg.chat_id, count + 2)
         message_ids.append(msg.message_id)
         if msg.reply_to_message:
@@ -607,20 +618,16 @@ async def delete_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         delete_messages_from_db(msg.chat_id, message_ids)
 
-        # پیام تأیید و پاک شدن خودکار بعد از ۵ ثانیه
         try:
             info = await context.bot.send_message(
-                msg.chat_id,
-                f"🗑 {deleted} پیام حذف شد."
+                msg.chat_id, f"🗑 {deleted} پیام حذف شد."
             )
-            import asyncio
             await asyncio.sleep(5)
             await info.delete()
         except Exception:
             pass
         return
 
-    # حالت دوم: حذف پیام ریپلای‌شده
     if msg.reply_to_message:
         try:
             await context.bot.delete_message(msg.chat_id, msg.reply_to_message.message_id)
@@ -635,7 +642,7 @@ async def delete_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await msg.reply_text("روی پیام کاربر ریپلای کنید یا بنویسید: حذف 30")
 
-# ==================== هندلر متن‌های فارسی ====================
+# ==================== هندلر فارسی ====================
 async def persian_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     if not msg or not msg.text:
@@ -661,7 +668,7 @@ async def persian_text_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     elif text == "حذف" or text.startswith("حذف "):
         await delete_cmd(update, context)
 
-# ==================== مدیریت ادمین ====================
+# ==================== ادمین ====================
 async def add_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     if update.effective_user.id != OWNER_ID:
@@ -827,7 +834,7 @@ async def rem_sms_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await msg.reply_text(f"کد «{code}» یافت نشد.")
 
-# ==================== بررسی دوره‌ای عضویت ====================
+# ==================== بررسی دوره‌ای ====================
 async def check_pending(context: ContextTypes.DEFAULT_TYPE):
     targets = get_lock_targets()
     if not targets:
@@ -866,10 +873,8 @@ def main():
 
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
-    # ورود اعضا
     app.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))
 
-    # دستورات اسلش‌دار
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("panel", start_cmd))
     app.add_handler(CommandHandler("help", start_cmd))
@@ -882,13 +887,13 @@ def main():
     app.add_handler(MessageHandler(filters.Regex(r'^/addsms\.'), add_sms_cmd))
     app.add_handler(MessageHandler(filters.Regex(r'^/remsms\.'), rem_sms_cmd))
 
-    # ⭐ ذخیره همه پیام‌های گروه (برای حذف گروهی) - گروه پایین‌تر اجرا میشه
+    # ذخیره پیام‌ها
     app.add_handler(
         MessageHandler(filters.ChatType.GROUPS & ~filters.COMMAND, save_msg_handler),
         group=99
     )
 
-    # ⭐ هندلر متن‌های فارسی
+    # هندلر فارسی
     app.add_handler(MessageHandler(
         filters.ChatType.GROUPS & filters.TEXT & ~filters.COMMAND,
         persian_text_handler

@@ -9,10 +9,9 @@ from telegram.ext import (
     ContextTypes, filters
 )
 from telegram.constants import ChatMemberStatus
-from telegram.request import HTTPXRequest
 
 # ==================== تنظیمات ====================
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8680298065:AAGuiJ6R0std9vXOAVTb-B-QYrpSb9cnaXA")
+BOT_TOKEN = "8680298065:AAGuiJ6R0std9vXOAVTb-B-QYrpSb9cnaXA"
 OWNER_ID = 8076104332
 DB_PATH = "bot_data.db"
 
@@ -303,9 +302,7 @@ async def check_pending(context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== نمایش مشخصات کاربر ====================
 async def show_user_info(update: Update, target_user, chat_id):
-    """نمایش مشخصات کاربر"""
     msg = update.effective_message
-    
     row = get_user(target_user.id, chat_id)
     if not row:
         save_user(target_user, chat_id)
@@ -334,8 +331,8 @@ async def show_user_info(update: Update, target_user, chat_id):
     text = (
         f"📋 <b>مشخصات کاربر</b>\n\n"
         f"👤 نام: {first_name or '—'}\n"
-        f"🔗 یوزرنیم: {'@' + username if username else 'ندارد'}\n"
-        f"🆔 یوزر آیدی: <code>{user_id}</code>\n"
+        f"🔗 یوزرنیم (Username): {'@' + username if username else 'ندارد'}\n"
+        f"🆔 یوزر آیدی (User ID): <code>{user_id}</code>\n"
         f"📅 تاریخ ورود: {jd}\n"
         f"⚠️ اخطارها: {warnings}\n"
         f"وضعیت: {status}"
@@ -351,12 +348,10 @@ async def user_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(user.id):
         return
 
-    # اگه ریپلای داشت، از ریپلای بگیر
     if msg.reply_to_message:
         await show_user_info(update, msg.reply_to_message.from_user, chat_id)
         return
 
-    # اگه آیدی عددی توی دستور بود
     if context.args:
         try:
             uid = int(to_en_digits(context.args[0]))
@@ -364,18 +359,17 @@ async def user_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_user_info(update, member.user, chat_id)
             return
         except Exception:
-            await msg.reply_text("⚠️ کاربر با این آیدی پیدا نشد.\nمثال: `/user 123456789`", parse_mode="Markdown")
+            await msg.reply_text("⚠️ کاربر با این آیدی پیدا نشد.\nمثال: /user 123456789")
             return
 
     await msg.reply_text(
         "⚠️ نحوه استفاده:\n"
-        "۱) روی پیام کاربر ریپلای کنید و بنویسید `/user`\n"
-        "۲) یا بنویسید `/user 123456789`\n"
-        "۳) یا بنویسید `ایدی 123456789`",
-        parse_mode="Markdown"
+        "۱) روی پیام کاربر ریپلای کنید و بنویسید /user\n"
+        "۲) یا بنویسید /user 123456789\n"
+        "۳) یا بنویسید ایدی 123456789"
     )
 
-# ==================== دستور /sokot (سکوت ۵ دقیقه) ====================
+# ==================== سکوت ۵ دقیقه ====================
 async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -394,7 +388,7 @@ async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text("کاربر یافت نشد.")
             return
     else:
-        await msg.reply_text("روی پیام کاربر ریپلای کنید یا آیدی بدهید:\n`/sokot 123456789`", parse_mode="Markdown")
+        await msg.reply_text("روی پیام کاربر ریپلای کنید یا آیدی بدهید:\n/sokot 123456789")
         return
 
     name = target.first_name or "کاربر"
@@ -404,7 +398,7 @@ async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await msg.reply_text("خطا در سکوت کاربر. مطمئن شوید ربات مدیر است.")
 
-# ==================== دستور /ekhtar (اخطار) ====================
+# ==================== اخطار ====================
 async def warn_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -423,7 +417,7 @@ async def warn_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text("کاربر یافت نشد.")
             return
     else:
-        await msg.reply_text("روی پیام کاربر ریپلای کنید یا آیدی بدهید:\n`/ekhtar 123456789`", parse_mode="Markdown")
+        await msg.reply_text("روی پیام کاربر ریپلای کنید یا آیدی بدهید:\n/ekhtar 123456789")
         return
 
     name = target.first_name or "کاربر"
@@ -431,9 +425,7 @@ async def warn_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if w >= 3:
         reset_warnings(target.id, chat_id)
         await restrict_user(context.bot, chat_id, target.id, 300, "اخطار سوم")
-        await msg.reply_text(
-            f"کاربر {name} به دلیل دریافت سه اخطار، به مدت ۵ دقیقه از ارسال پیام محروم شد."
-        )
+        await msg.reply_text(f"کاربر {name} به دلیل دریافت سه اخطار، به مدت ۵ دقیقه از ارسال پیام محروم شد.")
     else:
         await restrict_user(context.bot, chat_id, target.id, 60, "اخطار")
         await msg.reply_text(
@@ -441,7 +433,7 @@ async def warn_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"تعداد اخطارهای فعلی: {w} از ۳"
         )
 
-# ==================== دستور /ban (بسته یک‌روزه) ====================
+# ==================== بسته یک‌روزه ====================
 async def ban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -460,7 +452,7 @@ async def ban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text("کاربر یافت نشد.")
             return
     else:
-        await msg.reply_text("روی پیام کاربر ریپلای کنید یا آیدی بدهید:\n`/ban 123456789`", parse_mode="Markdown")
+        await msg.reply_text("روی پیام کاربر ریپلای کنید یا آیدی بدهید:\n/ban 123456789")
         return
 
     name = target.first_name or "کاربر"
@@ -470,7 +462,7 @@ async def ban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await msg.reply_text("خطا در بستن کاربر.")
 
-# ==================== دستور /azad (آزادسازی) ====================
+# ==================== آزادسازی ====================
 async def free_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -489,7 +481,7 @@ async def free_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text("کاربر یافت نشد.")
             return
     else:
-        await msg.reply_text("روی پیام کاربر ریپلای کنید یا آیدی بدهید:\n`/azad 123456789`", parse_mode="Markdown")
+        await msg.reply_text("روی پیام کاربر ریپلای کنید یا آیدی بدهید:\n/azad 123456789")
         return
 
     name = target.first_name or "کاربر"
@@ -498,17 +490,38 @@ async def free_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await unrestrict_user(context.bot, chat_id, target.id)
     await msg.reply_text(f"کاربر {name} از محدودیت خارج شد و از این پس می‌تواند پیام ارسال کند.")
 
-# ==================== دستورات فارسی ریپلای ====================
+# ==================== دستورات فارسی (ریپلای) ====================
 async def persian_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
-    if not msg or not msg.reply_to_message:
+    if not msg or not msg.text:
         return
     if not is_admin(update.effective_user.id):
         return
 
     cmd = msg.text.strip()
-    target = msg.reply_to_message.from_user
     chat_id = msg.chat_id
+
+    # ایدی با یا بدون ریپلای
+    if cmd.startswith("ایدی"):
+        parts = cmd.split()
+        if len(parts) >= 2:
+            try:
+                uid = int(to_en_digits(parts[1]))
+                member = await context.bot.get_chat_member(chat_id, uid)
+                await show_user_info(update, member.user, chat_id)
+            except Exception:
+                await msg.reply_text("کاربر با این آیدی پیدا نشد.")
+        elif msg.reply_to_message:
+            await show_user_info(update, msg.reply_to_message.from_user, chat_id)
+        else:
+            await msg.reply_text("روی پیام کاربر ریپلای کنید یا بنویسید: ایدی 123456789")
+        return
+
+    # بقیه دستورات نیاز به ریپلای دارن
+    if not msg.reply_to_message:
+        return
+
+    target = msg.reply_to_message.from_user
     name = target.first_name or "کاربر"
 
     if cmd == "اخطار":
@@ -538,21 +551,6 @@ async def persian_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await unrestrict_user(context.bot, chat_id, target.id)
         await msg.reply_text(f"کاربر {name} از محدودیت خارج شد و از این پس می‌تواند پیام ارسال کند.")
 
-    elif cmd.startswith("ایدی"):
-        # "ایدی 123456789"
-        parts = cmd.split()
-        if len(parts) >= 2:
-            try:
-                uid = int(to_en_digits(parts[1]))
-                member = await context.bot.get_chat_member(chat_id, uid)
-                await show_user_info(update, member.user, chat_id)
-            except Exception:
-                await msg.reply_text("کاربر با این آیدی پیدا نشد.")
-        else:
-            # اگه ریپلای داشت
-            if msg.reply_to_message:
-                await show_user_info(update, target, chat_id)
-
 # ==================== مدیریت ادمین‌ها ====================
 async def add_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
@@ -570,7 +568,7 @@ async def add_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_admin(uid)
     await msg.reply_text(f"کاربر با آیدی {uid} به عنوان ادمین اضافه شد.")
 
-# ==================== کانال/گروه اجباری ====================
+# ==================== کانال / گروه اجباری ====================
 async def add_channel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -640,7 +638,7 @@ async def list_lock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(f"{icon} {u}")
     await update.message.reply_text("\n".join(lines))
 
-# ==================== SMS ====================
+# ==================== پیام‌های زمان‌بندی‌شده ====================
 async def send_sms_job(context: ContextTypes.DEFAULT_TYPE):
     data = context.job.data
     code = data["code"]
@@ -754,7 +752,7 @@ def main():
     app.add_handler(CommandHandler("delgroup", del_group_cmd))
     app.add_handler(CommandHandler("listlock", list_lock_cmd))
 
-    # دستورات سکوت / اخطار / بن / آزاد با اسلش
+    # سکوت / اخطار / بن / آزاد
     app.add_handler(CommandHandler("sokot", mute_cmd))
     app.add_handler(CommandHandler("mute", mute_cmd))
     app.add_handler(CommandHandler("ekhtar", warn_cmd))
@@ -768,14 +766,13 @@ def main():
     app.add_handler(MessageHandler(filters.Regex(r'^/addsms\.'), add_sms_cmd))
     app.add_handler(MessageHandler(filters.Regex(r'^/remsms\.'), rem_sms_cmd))
 
-    # دستورات فارسی با ریپلای (اخطار، سکوت، ببندش، ازاد، ایدی)
+    # دستورات فارسی
     app.add_handler(MessageHandler(
-        filters.ChatType.GROUPS & filters.Regex(r'^(اخطار|سکوت|ببندش|ازاد|آزاد|ایدی)$') & filters.REPLY,
+        filters.ChatType.GROUPS & filters.Regex(r'^(اخطار|سکوت|ببندش|ازاد|آزاد)$') & filters.REPLY,
         persian_actions
     ))
-    # "ایدی 123456789" بدون ریپلای
     app.add_handler(MessageHandler(
-        filters.ChatType.GROUPS & filters.Regex(r'^ایدی\s+\d+$'),
+        filters.ChatType.GROUPS & filters.Regex(r'^ایدی(\s+\d+)?$'),
         persian_actions
     ))
 
